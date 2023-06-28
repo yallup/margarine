@@ -10,6 +10,29 @@ import margarine
 from scipy.special import logsumexp
 from sklearn.model_selection import train_test_split
 
+import tqdm
+
+def train_test_split_tensorflow(inputs, targets, test_size=0.2, random_state=None):
+    # Set random seed for reproducibility
+    # tf.random.set_seed(random_state)
+
+    # Determine the number of samples for the test set
+    num_samples = inputs.shape[0]
+    num_test_samples = int(test_size * num_samples)
+
+    # Create a random permutation of indices
+    shuffled_indices = tf.random.shuffle(tf.range(num_samples))
+
+    # Split the indices into training and testing sets
+    test_indices = shuffled_indices[:num_test_samples]
+    train_indices = shuffled_indices[num_test_samples:]
+
+    # Split the inputs and targets based on the indices
+    x_train, x_test = tf.gather(inputs, train_indices), tf.gather(inputs, test_indices)
+    y_train, y_test = tf.gather(targets, train_indices), tf.gather(targets, test_indices)
+
+    return x_train, x_test, y_train, y_test
+
 
 class MAF(object):
 
@@ -137,16 +160,16 @@ class MAF(object):
             self.clustering = True
 
         self.n = (np.sum(weights)**2)/(np.sum(weights**2))
-        self.sample_weights = weights
+        self.sample_weights = weights.astype('float32')
 
         theta_max = np.max(theta, axis=0)
         theta_min = np.min(theta, axis=0)
         a = ((self.n-2)*theta_max-theta_min)/(self.n-3)
         b = ((self.n-2)*theta_min-theta_max)/(self.n-3)
-        self.theta_min = kwargs.pop('theta_min', b)
-        self.theta_max = kwargs.pop('theta_max', a)
+        self.theta_min = kwargs.pop('theta_min', b).astype('float32')
+        self.theta_max = kwargs.pop('theta_max', a).astype('float32')
 
-        self.theta = theta
+        self.theta = theta.astype('float32')
 
         if type(self.number_networks) is not int:
             raise TypeError("'number_networks' must be an integer.")
@@ -296,6 +319,7 @@ class MAF(object):
             self.theta_max = self.new_theta_max
             self.theta_min = self.new_theta_min
 
+    
     def train(self, epochs=100, early_stop=False, loss_type='sum'):
         r"""
 
@@ -345,6 +369,7 @@ class MAF(object):
                                       self.sample_weights, self.maf,
                                       self.theta_min, self.theta_max)
 
+    # @tf.function(jit_compile=True)
     def _training(self, theta, sample_weights, maf,
                   theta_min, theta_max):
 
@@ -352,25 +377,34 @@ class MAF(object):
 
         phi = _forward_transform(theta, theta_min, theta_max)
 
-        mask = np.isfinite(phi).all(axis=-1)
-        phi = phi[mask, :]
-        weights_phi = sample_weights[mask]
-        weights_phi /= weights_phi.sum()
 
-        phi = phi.astype('float32')
-        self.phi = phi.copy()
-        weights_phi = weights_phi.astype('float32')
+        # mask = tf.experimental.numpy.all(tf.math.is_finite(phi),axis=-1) #.all(axis=-1)
+        mask = tf.reduce_all(tf.math.is_finite(phi),axis=-1)
+        # phi = phi[mask, :]
+        phi=phi[mask] 
+        weights_phi = sample_weights[mask]
+        weights_phi /= tf.math.reduce_sum(weights_phi)
+
+        # phi = phi.astype('float32')
+        # self.phi = phi.copy()
+        # weights_phi = weights_phi.astype('float32')
+
+        # phi_train, phi_test, weights_phi_train, weights_phi_test = \
+        #     train_test_split(phi, weights_phi, test_size=0.2)
+
 
         phi_train, phi_test, weights_phi_train, weights_phi_test = \
-            train_test_split(phi, weights_phi, test_size=0.2)
+            train_test_split_tensorflow(phi, weights_phi, test_size=0.2)
+
 
         self.loss_history = []
         self.test_loss_history = []
         c = 0
-        for i in range(self.epochs):
+        for i in tqdm.tqdm(range(self.epochs)):
+        # for i in range(self.epochs):
             loss = self._train_step(phi_train,
                                     weights_phi_train,
-                                    self.loss_type, maf).numpy()
+                                    self.loss_type, maf) #.numpy()
             self.loss_history.append(loss)
 
             if self.loss_type == 'sum':
@@ -401,6 +435,7 @@ class MAF(object):
                         return minimum_model
         return maf
 
+    @tf.function(jit_compile=True)
     def _train_step(self, x, w, loss_type, maf):
 
         r"""
@@ -408,17 +443,16 @@ class MAF(object):
         adjust the weights and biases of the neural networks via the
         optimizer algorithm.
         """
-
         with tf.GradientTape() as tape:
-            if loss_type == 'sum':
-                loss = -tf.reduce_sum(w*maf.log_prob(x))
-            elif loss_type == 'mean':
-                loss = -tf.reduce_mean(w*maf.log_prob(x))
-            gradients = tape.gradient(loss, maf.trainable_variables)
-            self.optimizer.apply_gradients(
-                zip(gradients,
-                    maf.trainable_variables))
-            return loss
+                if loss_type == 'sum':
+                    loss = -tf.reduce_sum(w*maf.log_prob(x))
+                elif loss_type == 'mean':
+                    loss = -tf.reduce_mean(w*maf.log_prob(x))
+                gradients = tape.gradient(loss, maf.trainable_variables)
+                self.optimizer.apply_gradients(
+                    zip(gradients,
+                        maf.trainable_variables))
+                return loss
 
     def __call__(self, u):
 

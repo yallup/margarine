@@ -24,8 +24,8 @@ def _forward_transform(x, min=0, max=1):
                 values...)
 
     """
-    x = tfd.Uniform(min, max).cdf(x).numpy()
-    x = tfd.Normal(0, 1).quantile(x).numpy()
+    x = tfd.Uniform(min, max).cdf(x) #.numpy()
+    x = tfd.Normal(0, 1).quantile(x) #.numpy()
     return x
 
 
@@ -51,6 +51,6 @@ def _inverse_transform(x, min, max):
                 values...)
 
     """
-    x = tfd.Normal(0, 1).cdf(x).numpy()
-    x = tfd.Uniform(min, max).quantile(x).numpy()
+    x = tfd.Normal(0, 1).cdf(x) #.numpy()
+    x = tfd.Uniform(min, max).quantile(x) #.numpy()
     return x
